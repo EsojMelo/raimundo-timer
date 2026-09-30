@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#13201c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Raimundo">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Relógio do Raimundo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@500;700;800&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+  /* Layout: a tela inteira é o botão; uma peça grande no centro mostra os segundos, controles discretos no rodapé */
+  :root {
+    --bg: #e7ebe6;          /* feltro claro da mesa */
+    --fg: #1e2a26;
+    --muted: #5d6b66;
+    --tile: #fbf7ec;        /* marfim da peça */
+    --tile-edge: #d9d1bb;
+    --blue: #1f5fb8;
+    --orange: #d9790f;
+    --red: #cc2b2b;
+    --ink: #1b1b1b;
+    --chip: #d6ddd7;
+    --display: "Rubik", system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #13201c; --fg: #e4ebe7; --muted: #8fa19a;
+      --tile: #f3eedf; --tile-edge: #b9b09a; --chip: #22332d;
+      --blue: #1f5fb8; --orange: #d9790f; --red: #cc2b2b; --ink: #1b1b1b;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #13201c; --fg: #e4ebe7; --muted: #8fa19a;
+    --tile: #f3eedf; --tile-edge: #b9b09a; --chip: #22332d;
+    --blue: #1f5fb8; --orange: #d9790f; --red: #cc2b2b; --ink: #1b1b1b;
+    color-scheme: dark;
+  }
+
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--display);
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: manipulation;
+    overflow: hidden;
+  }
+  .app {
+    height: 100%;
+    box-sizing: border-box;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 16px calc(20px + env(safe-area-inset-bottom, 0px));
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: 16px;
+    cursor: pointer;
+  }
+  .app:focus-visible { outline: 3px solid var(--blue); outline-offset: -6px; }
+
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  h1 { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.01em; }
+  .status {
+    font-family: var(--mono); font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted);
+  }
+
+  .stage { display: grid; place-items: center; min-height: 0; }
+  .tile {
+    --c: var(--blue);
+    position: relative;
+    width: min(72vw, 46vh, 360px);
+    aspect-ratio: 3 / 4;
+    max-width: 100%;
+    background: var(--tile);
+    border-radius: 7%;
+    box-shadow: 0 2px 0 var(--tile-edge), 0 10px 0 var(--tile-edge), 0 18px 30px rgba(0,0,0,.18);
+    display: grid;
+    place-items: center;
+    transition: transform .12s ease;
+  }
+  .tile.tap { transform: translateY(4px) scale(.985); }
+  .num {
+    font-weight: 800;
+    font-size: min(40vw, 26vh, 200px);
+    line-height: 1;
+    color: var(--c);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.04em;
+    transition: color .2s;
+  }
+  .num.long { font-size: min(27vw, 17vh, 132px); }
+  /* o "sorriso" do coringa sob o número, vira barra de progresso */
+  .bar {
+    position: absolute; left: 14%; right: 14%; bottom: 12%;
+    height: 8px; border-radius: 4px; background: var(--tile-edge); overflow: hidden;
+  }
+  .bar > i { display: block; height: 100%; width: 100%; background: var(--c); transform-origin: left; transition: background .2s; }
+
+  .tile[data-state="warn"] { --c: var(--orange); }
+  .tile[data-state="danger"] { --c: var(--red); }
+  .tile[data-state="over"] { --c: var(--red); animation: shake .5s ease 2; }
+  .tile[data-state="idle"] .num, .tile[data-state="paused"] .num { color: var(--ink); }
+  .tile[data-state="paused"] .bar > i { background: var(--ink); }
+  @keyframes shake {
+    0%,100% { transform: rotate(0); } 25% { transform: rotate(-4deg); } 75% { transform: rotate(4deg); }
+  }
+
+  .hint { text-align: center; color: var(--muted); font-size: 0.95rem; margin: 0; min-height: 1.3em; }
+
+  footer { display: grid; gap: 12px; }
+  .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+  .controls button {
+    font: 500 0.9rem var(--mono);
+    border: 0; border-radius: 999px; padding: 10px 14px;
+    background: var(--chip); color: var(--fg); cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .controls button[aria-pressed="true"] { background: var(--fg); color: var(--bg); }
+  .controls button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .stepper { display: flex; align-items: center; gap: 4px; background: var(--chip); border-radius: 999px; padding: 3px; }
+  .stepper button { background: transparent; padding: 7px 14px; font-size: 1.1rem; }
+  .stepper button:active { background: var(--bg); }
+  .stepper output { font: 700 1rem var(--mono); min-width: 4.2ch; text-align: center; font-variant-numeric: tabular-nums; }
+  .controls .sep { width: 1px; background: var(--chip); margin-inline: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .tile, .num, .bar > i { transition: none; }
+    .tile[data-state="over"] { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app" tabindex="0" role="button" aria-label="Toque para reiniciar o relógio">
+  <header>
+    <h1>Raimundo</h1>
+    <span class="status" id="status">pronto</span>
+  </header>
+
+  <div class="stage">
+    <div class="tile" id="tile" data-state="idle">
+      <span class="num" id="num" aria-live="off">60</span>
+      <div class="bar"><i id="bar"></i></div>
+    </div>
+  </div>
+
+  <footer>
+    <p class="hint" id="hint">Toque em qualquer lugar para começar</p>
+    <div class="controls" id="controls">
+      <div class="stepper" role="group" aria-label="Tempo por jogada">
+        <button type="button" id="minus" aria-label="Diminuir 5 segundos">−</button>
+        <output id="secs" aria-live="polite">1:00</output>
+        <button type="button" id="plus" aria-label="Aumentar 5 segundos">+</button>
+      </div>
+      <span class="sep" aria-hidden="true"></span>
+      <button type="button" id="pause" aria-pressed="false">Pausar</button>
+      <button type="button" id="sound" aria-pressed="true">Som</button>
+    </div>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const app = $('app'), tile = $('tile'), num = $('num'), bar = $('bar');
+  const hint = $('hint'), status = $('status'), pauseBtn = $('pause'), soundBtn = $('sound');
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+  };
+
+  const MIN = 10, MAX = 600, STEP = 5;
+  let total = store.get('raimundo.secs', 60);
+  let soundOn = store.get('raimundo.sound', true);
+  let state = 'idle';          // idle | running | paused | over
+  let endAt = 0;               // timestamp (ms) em que o tempo acaba
+  let remainingMs = total * 1000;
+  let lastBeepSec = null;
+  let raf = 0;
+
+  // ---- som (Web Audio, só depois do primeiro toque) ----
+  let ctx = null;
+  function beep(freq, dur, vol = 0.25) {
+    if (!soundOn) return;
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = freq;
+      g.gain.setValueAtTime(vol, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(); o.stop(ctx.currentTime + dur);
+    } catch {}
+  }
+  function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch {} }
+
+  // ---- manter a tela acesa durante o jogo ----
+  let lock = null;
+  async function keepAwake() {
+    try { if (!lock && navigator.wakeLock) { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', () => lock = null); } } catch {}
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state !== 'idle') keepAwake(); });
+
+  function fmt(sec) {
+    if (total <= 60) return String(sec);
+    const m = Math.floor(sec / 60), s = sec % 60;
+    return m + ':' + String(s).padStart(2, '0');
+  }
+
+  function render(ms) {
+    const sec = Math.ceil(ms / 1000);
+    num.textContent = fmt(sec);
+    num.classList.toggle('long', total > 60);
+    bar.style.transform = `scaleX(${Math.max(0, ms / (total * 1000))})`;
+
+    let look = state;
+    if (state === 'running') look = sec <= 10 ? 'danger' : sec <= 20 ? 'warn' : 'running';
+    tile.dataset.state = look;
+  }
+
+  function tick() {
+    const ms = Math.max(0, endAt - performance.now());
+    const sec = Math.ceil(ms / 1000);
+    if (sec !== lastBeepSec && sec <= 5 && sec > 0) { beep(880, 0.08, 0.15); lastBeepSec = sec; }
+    if (ms <= 0) return timeUp();
+    render(ms);
+    raf = requestAnimationFrame(tick);
+  }
+
+  function timeUp() {
+    cancelAnimationFrame(raf);
+    state = 'over'; remainingMs = 0;
+    num.textContent = fmt(0);
+    bar.style.transform = 'scaleX(0)';
+    tile.dataset.state = 'over';
+    status.textContent = 'acabou o tempo';
+    hint.textContent = 'Tempo! Toque para a próxima jogada';
+    beep(440, 0.9, 0.3);
+    buzz([400, 150, 400]);
+  }
+
+  function restart() {
+    cancelAnimationFrame(raf);
+    state = 'running';
+    endAt = performance.now() + total * 1000;
+    lastBeepSec = null;
+    pauseBtn.setAttribute('aria-pressed', 'false');
+    pauseBtn.textContent = 'Pausar';
+    status.textContent = 'valendo';
+    hint.textContent = 'Toque para passar a vez e reiniciar';
+    beep(1320, 0.05, 0.1);
+    buzz(30);
+    keepAwake();
+    tile.classList.remove('tap'); void tile.offsetWidth; tile.classList.add('tap');
+    setTimeout(() => tile.classList.remove('tap'), 120);
+    tick();
+  }
+
+  function togglePause() {
+    if (state === 'running') {
+      cancelAnimationFrame(raf);
+      remainingMs = Math.max(0, endAt - performance.now());
+      state = 'paused';
+      pauseBtn.setAttribute('aria-pressed', 'true');
+      pauseBtn.textContent = 'Continuar';
+      status.textContent = 'pausado';
+      hint.textContent = 'Toque em Continuar, ou na tela para reiniciar';
+      render(remainingMs);
+    } else if (state === 'paused') {
+      state = 'running';
+      endAt = performance.now() + remainingMs;
+      pauseBtn.setAttribute('aria-pressed', 'false');
+      pauseBtn.textContent = 'Pausar';
+      status.textContent = 'valendo';
+      hint.textContent = 'Toque para passar a vez e reiniciar';
+      tick();
+    }
+  }
+
+  function setTotal(secs) {
+    total = Math.min(MAX, Math.max(MIN, secs)); store.set('raimundo.secs', total);
+    $('secs').textContent = Math.floor(total / 60) + ':' + String(total % 60).padStart(2, '0');
+    cancelAnimationFrame(raf);
+    state = 'idle'; remainingMs = total * 1000;
+    status.textContent = 'pronto';
+    hint.textContent = 'Toque em qualquer lugar para começar';
+    pauseBtn.setAttribute('aria-pressed', 'false');
+    pauseBtn.textContent = 'Pausar';
+    render(remainingMs);
+  }
+
+  // Toque em qualquer lugar = reinicia (pointerdown responde mais rápido que click)
+  app.addEventListener('pointerdown', e => {
+    if (e.target.closest('#controls')) return;
+    e.preventDefault();
+    restart();
+  });
+  app.addEventListener('keydown', e => {
+    if (e.target.closest('#controls')) return;
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); restart(); }
+  });
+
+  $('minus').addEventListener('click', () => setTotal(total - STEP));
+  $('plus').addEventListener('click', () => setTotal(total + STEP));
+  pauseBtn.addEventListener('click', togglePause);
+  soundBtn.addEventListener('click', () => {
+    soundOn = !soundOn; store.set('raimundo.sound', soundOn);
+    soundBtn.setAttribute('aria-pressed', String(soundOn));
+    soundBtn.textContent = soundOn ? 'Som' : 'Mudo';
+  });
+
+  soundBtn.setAttribute('aria-pressed', String(soundOn));
+  soundBtn.textContent = soundOn ? 'Som' : 'Mudo';
+  setTotal(Number.isFinite(total) ? total : 60);
+
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
