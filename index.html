@@ -133,6 +133,40 @@
   .stepper output { font: 700 1rem var(--mono); min-width: 4.2ch; text-align: center; font-variant-numeric: tabular-nums; }
   .controls .sep { width: 1px; background: var(--chip); margin-inline: 4px; }
 
+  /* painel do alarme */
+  .sheet[hidden] { display: none; }
+  .sheet {
+    position: fixed; inset: 0; z-index: 10;
+    display: grid; align-items: end;
+    background: rgba(0,0,0,.45);
+  }
+  .sheet-card {
+    background: var(--bg); color: var(--fg);
+    border-radius: 18px 18px 0 0;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+    display: grid; gap: 14px;
+    max-width: 520px; width: 100%; margin-inline: auto; box-sizing: border-box;
+  }
+  .sheet-card h2 { margin: 0; font-size: 1.1rem; font-weight: 800; }
+  .choices { display: grid; gap: 8px; }
+  .choice {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; border-radius: 12px; background: var(--chip); cursor: pointer;
+  }
+  .choice input { accent-color: var(--blue); width: 20px; height: 20px; margin: 0; flex: none; }
+  .choice span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .choice small { display: block; color: var(--muted); font: 500 0.75rem var(--mono); }
+  .choice.disabled { opacity: .5; cursor: default; }
+  .sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .sheet-actions button, .sheet-actions label {
+    font: 500 0.9rem var(--mono); border: 0; border-radius: 999px; padding: 10px 14px;
+    background: var(--chip); color: var(--fg); cursor: pointer;
+  }
+  .sheet-actions .primary { background: var(--fg); color: var(--bg); margin-left: auto; }
+  .sheet-actions button:focus-visible, .sheet-actions label:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .sheet-note { margin: 0; color: var(--muted); font-size: 0.85rem; min-height: 1.2em; }
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
   @media (prefers-reduced-motion: reduce) {
     .tile, .num, .bar > i { transition: none; }
     .tile[data-state="over"] { animation: none; }
@@ -164,8 +198,25 @@
       <span class="sep" aria-hidden="true"></span>
       <button type="button" id="pause" aria-pressed="false">Pausar</button>
       <button type="button" id="sound" aria-pressed="true">Som</button>
+      <button type="button" id="alarmBtn" aria-haspopup="dialog">Alarme</button>
     </div>
   </footer>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <h2 id="sheetTitle">Som de tempo esgotado</h2>
+    <div class="choices">
+      <label class="choice"><input type="radio" name="alarm" id="alarmDefault" value="default"><span>Bipe padrão</span></label>
+      <label class="choice" id="customChoice"><input type="radio" name="alarm" id="alarmCustom" value="custom"><span id="customName">Meu áudio</span></label>
+    </div>
+    <div class="sheet-actions">
+      <label for="alarmFile">Escolher arquivo…<input type="file" id="alarmFile" accept="audio/*" class="visually-hidden"></label>
+      <button type="button" id="testAlarm">Testar</button>
+      <button type="button" id="closeSheet" class="primary">Pronto</button>
+    </div>
+    <p class="sheet-note" id="sheetNote"></p>
+  </div>
 </div>
 
 <script>
@@ -193,8 +244,7 @@
   function beep(freq, dur, vol = 0.25) {
     if (!soundOn) return;
     try {
-      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
-      if (ctx.state === 'suspended') ctx.resume();
+      audioCtx();
       const o = ctx.createOscillator(), g = ctx.createGain();
       o.type = 'square'; o.frequency.value = freq;
       g.gain.setValueAtTime(vol, ctx.currentTime);
@@ -203,6 +253,77 @@
       o.start(); o.stop(ctx.currentTime + dur);
     } catch {}
   }
+  function audioCtx() {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended') ctx.resume();
+    return ctx;
+  }
+
+  // ---- alarme personalizado (arquivo do usuário, guardado no IndexedDB) ----
+  let alarmChoice = store.get('raimundo.alarm', 'default');   // 'default' | 'custom'
+  let customName = null, customData = null, customBuffer = null, playing = null;
+
+  function idb(mode, fn) {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('raimundo', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('files');
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        const tx = req.result.transaction('files', mode);
+        const r = fn(tx.objectStore('files'));
+        tx.oncomplete = () => resolve(r && r.result);
+        tx.onerror = () => reject(tx.error);
+      };
+    });
+  }
+
+  async function loadCustom() {
+    try {
+      const saved = await idb('readonly', st => st.get('alarm'));
+      if (saved) { customName = saved.name; customData = saved.data; }
+    } catch {}
+    renderSheet();
+  }
+
+  async function customAudio() {
+    if (!customBuffer) customBuffer = await audioCtx().decodeAudioData(customData.slice(0));
+    return customBuffer;
+  }
+
+  function stopAlarm() {
+    if (playing) { try { playing.stop(); } catch {} playing = null; }
+    $('testAlarm').textContent = 'Testar';
+  }
+
+  async function playAlarm() {
+    stopAlarm();
+    if (!soundOn) return;
+    if (alarmChoice === 'custom' && customData) {
+      try {
+        const buf = await customAudio();
+        const c = audioCtx(), src = c.createBufferSource();
+        src.buffer = buf; src.connect(c.destination);
+        src.onended = () => { if (playing === src) stopAlarm(); };
+        src.start(); playing = src;
+        $('testAlarm').textContent = 'Parar';
+        return;
+      } catch { /* arquivo ilegível: usa o bipe */ }
+    }
+    beep(440, 0.9, 0.3);
+  }
+
+  function renderSheet() {
+    const has = !!customData;
+    if (!has && alarmChoice === 'custom') alarmChoice = 'default';
+    $('alarmCustom').disabled = !has;
+    $('customChoice').classList.toggle('disabled', !has);
+    const small = document.createElement('small');
+    small.textContent = has ? 'arquivo escolhido' : 'nenhum arquivo escolhido';
+    $('customName').replaceChildren(has ? customName : 'Meu áudio', small);
+    $('alarmDefault').checked = alarmChoice === 'default';
+    $('alarmCustom').checked = alarmChoice === 'custom';
+  }
+
   function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch {} }
 
   // ---- manter a tela acesa durante o jogo ----
@@ -246,12 +367,13 @@
     tile.dataset.state = 'over';
     status.textContent = 'acabou o tempo';
     hint.textContent = 'Tempo! Toque para a próxima jogada';
-    beep(440, 0.9, 0.3);
+    playAlarm();
     buzz([400, 150, 400]);
   }
 
   function restart() {
     cancelAnimationFrame(raf);
+    stopAlarm();
     state = 'running';
     endAt = performance.now() + total * 1000;
     lastBeepSec = null;
@@ -316,12 +438,50 @@
   pauseBtn.addEventListener('click', togglePause);
   soundBtn.addEventListener('click', () => {
     soundOn = !soundOn; store.set('raimundo.sound', soundOn);
+    if (!soundOn) stopAlarm();
     soundBtn.setAttribute('aria-pressed', String(soundOn));
     soundBtn.textContent = soundOn ? 'Som' : 'Mudo';
   });
 
+  // painel do alarme
+  const sheet = $('sheet'), note = $('sheetNote');
+  $('alarmBtn').addEventListener('click', () => { note.textContent = ''; renderSheet(); sheet.hidden = false; $('closeSheet').focus(); });
+  function closeSheet() { stopAlarm(); sheet.hidden = true; $('alarmBtn').focus(); }
+  $('closeSheet').addEventListener('click', closeSheet);
+  sheet.addEventListener('click', e => { if (e.target === sheet) closeSheet(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
+
+  document.querySelectorAll('input[name="alarm"]').forEach(r => r.addEventListener('change', () => {
+    alarmChoice = r.value; store.set('raimundo.alarm', alarmChoice);
+  }));
+
+  $('alarmFile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    note.textContent = 'Carregando…';
+    try {
+      const data = await file.arrayBuffer();
+      const buf = await audioCtx().decodeAudioData(data.slice(0));   // confere se o celular consegue tocar
+      await idb('readwrite', st => st.put({ name: file.name, data }, 'alarm'));
+      customName = file.name; customData = data; customBuffer = buf;
+      alarmChoice = 'custom'; store.set('raimundo.alarm', alarmChoice);
+      renderSheet();
+      note.textContent = 'Pronto. Toque em Testar para ouvir.';
+    } catch {
+      note.textContent = 'Não consegui ler esse arquivo. Tente um MP3, M4A ou WAV.';
+    }
+  });
+
+  $('testAlarm').addEventListener('click', () => {
+    if (playing) return stopAlarm();
+    if (!soundOn) { note.textContent = 'O som está desligado (Mudo). Ligue em Som para testar.'; return; }
+    playAlarm();
+  });
+
   soundBtn.setAttribute('aria-pressed', String(soundOn));
   soundBtn.textContent = soundOn ? 'Som' : 'Mudo';
+  loadCustom();
   setTotal(Number.isFinite(total) ? total : 60);
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
